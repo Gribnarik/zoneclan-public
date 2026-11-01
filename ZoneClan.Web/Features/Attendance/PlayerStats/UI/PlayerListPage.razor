@@ -1,0 +1,221 @@
+@page "/players"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Attendance.PlayerStats.Models
+@inject AttendanceApi Api
+@inject ILogger<PlayerListPage> Logger
+
+<h1>Игроки</h1>
+<div class="toolbar">
+    <label>С <InputDate @bind-Value="_from" /></label>
+    <label>По <InputDate @bind-Value="_to" /></label>
+    <button @onclick="LoadAsync">Обновить</button>
+</div>
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+
+@{
+    var groups = _rows.GroupBy(r => r.Status).OrderBy(g => StatusOrder(g.Key));
+}
+@foreach (var group in groups)
+{
+    <details open>
+        <summary><strong>@StatusName(group.Key)</strong> (@group.Count())</summary>
+        <div class="panel">
+            <table>
+                <thead>
+                    <tr>
+                        <th @onclick='() => Sort("Nickname")' style="cursor:pointer">Ник @SortMark("Nickname")</th>
+                        <th @onclick='() => Sort("Games")' style="cursor:pointer">Игры @SortMark("Games")</th>
+                        <th @onclick='() => Sort("Attended")' style="cursor:pointer">Явка @SortMark("Attended")</th>
+                        <th @onclick='() => Sort("Excused")' style="cursor:pointer">Отписки @SortMark("Excused")</th>
+                        <th @onclick='() => Sort("Missed")' style="cursor:pointer">Пропуски @SortMark("Missed")</th>
+                        <th @onclick='() => Sort("Kills")' style="cursor:pointer">K @SortMark("Kills")</th>
+                        <th @onclick='() => Sort("Deaths")' style="cursor:pointer">D @SortMark("Deaths")</th>
+                        <th @onclick='() => Sort("Assists")' style="cursor:pointer">A @SortMark("Assists")</th>
+                        <th @onclick='() => Sort("Kd")' style="cursor:pointer">K/D @SortMark("Kd")</th>
+                        <th @onclick='() => Sort("Kda")' style="cursor:pointer">KDA @SortMark("Kda")</th>
+                        <th @onclick='() => Sort("Score")' style="cursor:pointer">Очки @SortMark("Score")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var player in SortRows(group))
+                    {
+                        <tr @onclick="() => Select(player)" style="cursor:pointer">
+                            <td>@player.Nickname</td>
+                            <td>@player.Games</td>
+                            <td>@player.Attended</td>
+                            <td>@player.Excused</td>
+                            <td>@player.Missed</td>
+                            <td>@player.Kills</td>
+                            <td>@player.Deaths</td>
+                            <td>@player.Assists</td>
+                            <td>@player.Kd.ToString("0.##")</td>
+                            <td>@player.Kda.ToString("0.##")</td>
+                            <td>@player.Score</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </details>
+}
+
+@if (_selected is not null)
+{
+    <div class="drawer-back" @onclick="() => _selected = null"></div>
+    <aside class="drawer">
+        <button class="ghost" @onclick="() => _selected = null">Закрыть</button>
+        <h2>@_selected.Nickname</h2>
+        <div class="fields">
+            <p>Статус: @StatusName(_selected.Status)</p>
+            <p>Игры: @_selected.Games</p>
+            <p>Явка: @_selected.Attended</p>
+            <p>Отписки: @_selected.Excused</p>
+            <p>Пропуски: @_selected.Missed</p>
+            <p>K/D/A: @_selected.Kills / @_selected.Deaths / @_selected.Assists</p>
+            <p>K/D: @_selected.Kd.ToString("0.##")</p>
+            <p>KDA: @_selected.Kda.ToString("0.##")</p>
+            <p>Очки: @_selected.Score</p>
+            <p>Посещаемость: @(_selected.Games > 0 ? Math.Round(_selected.Attended * 100.0 / _selected.Games, 1) : 0)%</p>
+        </div>
+        <h3>Балл полезности</h3>
+        @{
+            var k = _selected.Kills; var d = _selected.Deaths; var a = _selected.Assists;
+            var personal = d == 0 ? k + a*0.6 : (k + a*0.6) / d * 10;
+            var team = k == 0 ? 0.0 : (a / (double)k) * 10;
+            var volume = d == 0 ? k + a : (k + a) / (double)d;
+            var avgScore = _selected.Games > 0 ? (double)_selected.Score / _selected.Games : 0;
+            var stability = avgScore / 1000.0;
+            var attendPct = _selected.Games > 0 ? _selected.Attended * 100.0 / _selected.Games : 0;
+            var attendScore = attendPct >= 100 ? 5.0 : attendPct >= 83 ? 3.0 : attendPct >= 50 ? 1.0 : 0.0;
+            var characteristic = _selected.Characteristic;
+            var total = personal + team + volume + stability + attendScore + characteristic;
+        }
+        <table>
+            <tbody>
+                <tr><td>Личная результативность (K + A×0.6) / D × 10</td><td>@personal.ToString("0.##")</td></tr>
+                <tr><td>Командный вклад (A / K) × 10</td><td>@team.ToString("0.##")</td></tr>
+                <tr><td>Объём участия (K + A) / D</td><td>@volume.ToString("0.##")</td></tr>
+                <tr><td>Стабильность Средний Score / 1000</td><td>@stability.ToString("0.##")</td></tr>
+                <tr><td>Посещаемость (≥100→5, ≥83→3, ≥50→1)</td><td>@attendScore.ToString("0.##")</td></tr>
+                <tr>
+                    <td>Характеристика (вручную)</td>
+                    <td>
+                        <input type="number" min="0" max="40" @bind="_selected.Characteristic" style="width:60px;" />
+                        <button class="ghost" style="padding:2px 6px;" @onclick="SaveCharacteristicAsync">Сохранить</button>
+                        <span class="hint">/ 40</span>
+                    </td>
+                </tr>
+                <tr><td><b>ИТОГО</b></td><td><b>@total.ToString("0.##")</b></td></tr>
+            </tbody>
+        </table>
+        <h3>Этапы (последние 10)</h3>
+        @if (_card is null || _card.Lines.Count == 0)
+        {
+            <p class="hint">Нет данных.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Дата</th><th>Этап</th><th>K</th><th>D</th><th>A</th><th>Очки</th><th>Рез.</th></tr></thead>
+                <tbody>
+                    @foreach (var line in _card.Lines.OrderByDescending(l => l.WeekStart).ThenByDescending(l => l.Stage).Take(10))
+                    {
+                        <tr>
+                            <td>@line.WeekStart.ToString("dd.MM")</td>
+                            <td>@line.Stage</td>
+                            <td>@line.Kills</td>
+                            <td>@line.Deaths</td>
+                            <td>@line.Assists</td>
+                            <td>@line.Score</td>
+                            <td>@(line.IsExcused ? "отписка" : (line.IsWinner ? "победа" : "поражение"))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </aside>
+}
+
+@code {
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _from;
+    private List<PlayerListRowDto> _rows = [];
+    private PlayerListRowDto? _selected;
+    private PlayerCardDto? _card;
+    private string _error = "";
+    private string _sortColumn = "Score";
+    private bool _sortDesc = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _from = _to.AddDays(-56);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = "";
+        try { _rows = await Api.GetPlayerListAsync(_from, _to); }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "PlayerList error"); }
+    }
+
+    private async Task Select(PlayerListRowDto p)
+    {
+        _selected = p;
+        _card = null;
+        try { _card = await Api.GetPlayerAsync(p.PlayerId, p.Nickname, _from, _to); }
+        catch (Exception ex) { Logger.LogError(ex, "Player card load"); }
+    }
+
+    private async Task SaveCharacteristicAsync()
+    {
+        if (_selected?.PlayerId is null) return;
+        try { await Api.UpdateCharacteristicAsync(_selected.PlayerId.Value, _selected.Characteristic); }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Save characteristic"); }
+    }
+
+    private void Sort(string col)
+    {
+        if (_sortColumn == col) _sortDesc = !_sortDesc;
+        else { _sortColumn = col; _sortDesc = true; }
+    }
+
+    private string SortMark(string col) => _sortColumn == col ? (_sortDesc ? "↓" : "↑") : "";
+
+    private IEnumerable<PlayerListRowDto> SortRows(IEnumerable<PlayerListRowDto> rows)
+    {
+        Func<PlayerListRowDto, object?> key = _sortColumn switch
+        {
+            "Nickname" => p => p.Nickname,
+            "Games" => p => p.Games,
+            "Attended" => p => p.Attended,
+            "Excused" => p => p.Excused,
+            "Missed" => p => p.Missed,
+            "Kills" => p => p.Kills,
+            "Deaths" => p => p.Deaths,
+            "Assists" => p => p.Assists,
+            "Kd" => p => p.Kd,
+            "Kda" => p => p.Kda,
+            "Score" => p => p.Score,
+            _ => p => p.Score
+        };
+        return _sortDesc ? rows.OrderByDescending(key) : rows.OrderBy(key);
+    }
+
+    private static int StatusOrder(string status) => status switch
+    {
+        "pending" => 0,
+        "in_clan" => 1,
+        "on_leave" => 2,
+        "excluded" => 3,
+        _ => 4
+    };
+
+    private static string StatusName(string status) => status switch
+    {
+        "in_clan" => "в клане",
+        "on_leave" => "в отпуске",
+        "excluded" => "исключен",
+        _ => "в обработке"
+    };
+}

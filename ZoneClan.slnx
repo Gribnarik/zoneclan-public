@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ZoneClan.Bot/ZoneClan.Bot.csproj" />
+  <Project Path="ZoneClan.Core/ZoneClan.Core.csproj" />
+  <Project Path="ZoneClan.Server/ZoneClan.Server.csproj" />
+  <Project Path="ZoneClan.Web/ZoneClan.Web.csproj" />
+</Solution>

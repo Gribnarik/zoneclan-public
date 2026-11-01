@@ -1,0 +1,266 @@
+@page "/penalties"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Penalties.Models
+@using ZoneClan.Core.Features.Roster.Models
+@using ZoneClan.Web.Features.Penalties.Data
+@using ZoneClan.Web.Features.Roster.Data
+@inject PenaltiesApi Penalties
+@inject RosterApi Roster
+
+<h1>Штрафы</h1>
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+
+@if (_page is not null)
+{
+    <section class="cards">
+        @foreach (var summary in _page.Summaries)
+        {
+            <div class="player-tile">
+                <strong>@summary.Nickname</strong>
+                <div>@summary.TotalPoints очков</div>
+                <div class="hint">@summary.ActiveCount активных</div>
+            </div>
+        }
+    </section>
+
+    <form class="panel" @onsubmit="IssueAsync">
+        <h2>Выдать штраф</h2>
+        <label>Игрок
+            <select @bind="_playerId">
+                <option value="0">Выберите</option>
+                @foreach (var player in _players)
+                {
+                    <option value="@player.DiscordId">@player.Nickname</option>
+                }
+            </select>
+        </label>
+        <label>Тип
+            <select @bind="_typeId" @bind:after="ApplyType">
+                @foreach (var type in _page.Types)
+                {
+                    <option value="@type.Id">@type.Name</option>
+                }
+            </select>
+        </label>
+        <label>Причина <input @bind="_reason" /></label>
+        <label>Очки <input type="number" @bind="_points" /></label>
+        <button type="submit" disabled="@_busy">Выдать</button>
+    </form>
+
+    <label class="hint"><input type="checkbox" @bind="_resolved" @bind:after="LoadAsync" /> Показать погашенные и отмененные</label>
+    
+    <div class="panel" style="margin-top: 12px;">
+        <table>
+            <thead>
+                <tr><th>Игрок</th><th>Тип</th><th>Причина</th><th>Очки</th><th>Статус</th><th>Дата</th><th>Действия</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _page.Items)
+                {
+                    <tr>
+                        <td>@item.Nickname</td>
+                        <td>@item.TypeName</td>
+                        <td>@item.Reason</td>
+                        <td>@item.Points</td>
+                        <td>
+                            @if (item.Status == "active") { <span class="badge wait">Активен</span> }
+                            else if (item.Status == "worked_off") { <span class="badge clan">Погашен (@GetMethodName(item.ResolutionMethod))</span> }
+                            else { <span class="badge out">Отменен</span> }
+                        </td>
+                        <td>@item.IssuedAt.ToLocalTime().ToString("dd.MM.yyyy")</td>
+                        <td>
+                            @if (item.Status == "active")
+                            {
+                                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                    <button class="ghost" style="padding: 4px 8px; font-size: 0.8rem;" @onclick="() => OpenResolve(item.Id)">Погасить</button>
+                                    <button class="ghost" style="padding: 4px 8px; font-size: 0.8rem;" @onclick="() => OpenEdit(item)">Изменить</button>
+                                    <button class="ghost" style="padding: 4px 8px; font-size: 0.8rem;" @onclick="() => CancelAsync(item.Id)">Отменить</button>
+                                    <button class="warn" style="padding: 4px 8px; font-size: 0.8rem;" @onclick="() => DeleteAsync(item.Id)">Удалить</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <span class="hint">—</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<!-- МОДАЛКА ПОГАШЕНИЯ -->
+@if (_resolveId.HasValue)
+{
+    <div class="modal-back">
+        <div class="modal-panel">
+            <h3>Как погасить штраф?</h3>
+            <button class="ghost" style="justify-content: flex-start;" @onclick='() => ResolveAsync(_resolveId.Value, "money")'>Оплатить штраф</button>
+            <button class="ghost" style="justify-content: flex-start;" @onclick='() => ResolveAsync(_resolveId.Value, "sessions")'>Отыграть сессиями</button>
+            <button class="ghost" style="justify-content: flex-start;" @onclick='() => ResolveAsync(_resolveId.Value, "recruiting")'>Набрать людей</button>
+            <button class="ghost" style="margin-top: 10px;" @onclick="() => _resolveId = null">Отмена</button>
+        </div>
+    </div>
+}
+
+<!-- МОДАЛКА РЕДАКТИРОВАНИЯ -->
+@if (_editItem != null)
+{
+    <div class="modal-back">
+        <div class="modal-panel">
+            <h3>Редактировать штраф</h3>
+            <label>Тип
+                <select @bind="_editTypeId">
+                    @foreach (var type in _page!.Types)
+                    {
+                        <option value="@type.Id">@type.Name</option>
+                    }
+                </select>
+            </label>
+            <label>Причина <input @bind="_editReason" /></label>
+            <label>Очки <input type="number" @bind="_editPoints" /></label>
+            <div style="display:flex; gap:10px; margin-top:15px;">
+                <button @onclick="SaveEditAsync">Сохранить</button>
+                <button class="ghost" @onclick="() => _editItem = null">Отмена</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private PenaltyPageDto? _page;
+    private List<RosterPlayerDto> _players = [];
+    private string _error = "";
+    private bool _busy;
+    private bool _resolved;
+    private ulong _playerId;
+    private int _typeId;
+    private string _reason = "";
+    private int _points;
+
+    // Состояния для модалок
+    private int? _resolveId;
+    private PenaltyDto? _editItem;
+    private int _editTypeId;
+    private string _editReason = "";
+    private int _editPoints;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = "";
+        try
+        {
+            _page = await Penalties.GetAsync(_resolved);
+            _players = await Roster.GetListAsync();
+            if (_typeId == 0 && _page.Types.Count > 0)
+                ApplyTypeDefaults(_page.Types[0]);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private void ApplyType()
+    {
+        var type = _page?.Types.FirstOrDefault(item => item.Id == _typeId);
+        if (type is not null)
+            ApplyTypeDefaults(type);
+    }
+
+    private void ApplyTypeDefaults(PenaltyTypeDto type)
+    {
+        _typeId = type.Id;
+        _points = type.DefaultPoints;
+    }
+
+    private async Task IssueAsync()
+    {
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Penalties.IssueAsync(new IssuePenaltyRequest
+            {
+                PlayerId = _playerId,
+                TypeId = _typeId,
+                Reason = _reason,
+                Points = _points
+            });
+            _reason = "";
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private void OpenResolve(int id) => _resolveId = id;
+
+    private async Task ResolveAsync(int id, string method)
+    {
+        _busy = true;
+        try
+        {
+            await Penalties.ResolveAsync(id, method);
+            _resolveId = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task CancelAsync(int id)
+    {
+        try
+        {
+            await Penalties.CancelAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        try
+        {
+            await Penalties.DeleteAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private void OpenEdit(PenaltyDto item)
+    {
+        _editItem = item;
+        _editTypeId = _page!.Types.FirstOrDefault(t => t.Name == item.TypeName)?.Id ?? _page.Types[0].Id;
+        _editReason = item.Reason;
+        _editPoints = item.Points;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editItem is null) return;
+        _busy = true;
+        try
+        {
+            await Penalties.UpdateAsync(_editItem.Id, new UpdatePenaltyRequest
+            {
+                TypeId = _editTypeId,
+                Reason = _editReason,
+                Points = _editPoints
+            });
+            _editItem = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private static string GetMethodName(string? method) => method switch
+    {
+        "money" => "Оплачен штраф",
+        "sessions" => "Отыгран сессиями",
+        "recruiting" => "Набраны люди",
+        _ => "—"
+    };
+}

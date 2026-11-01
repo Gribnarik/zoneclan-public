@@ -1,0 +1,263 @@
+@page "/squads"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Roster.Models
+@using ZoneClan.Core.Features.Squads.Models
+@using ZoneClan.Web.Features.Roster.Data
+@using ZoneClan.Web.Features.Squads.Data
+@inject SquadsApi Squads
+@inject RosterApi Roster
+@inject ILogger<SquadsPage> Logger
+
+<h1>Отряды</h1>
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+
+<div style="display:grid;grid-template-columns:1fr 320px;gap:16px;">
+    <div class="squads">
+        @foreach (var squad in _squads)
+        {
+            <article class="squad">
+                <label>Название
+                    <input value="@squad.Name" @onchange="e => RenameAsync(squad.Id, e.Value?.ToString() ?? squad.Name, squad.Description)" />
+                </label>
+                <label>Описание
+                    <textarea @bind="squad.Description" @onblur="() => RenameAsync(squad.Id, squad.Name, squad.Description)" rows="2" style="width:100%;"></textarea>
+                </label>
+
+                <h3>Состав (5 мест)</h3>
+                @{
+                    var commander = squad.Members.FirstOrDefault(m => m.Role == "commander");
+                    var deputy = squad.Members.FirstOrDefault(m => m.Role == "deputy");
+                    var fighters = squad.Members.Where(m => m.Role == "fighter").ToList();
+                }
+                <div class="slot" draggable="true" @ondragstart="() => { if (commander is not null) _draggedPlayerId = commander.PlayerId; }" @ondrop="() => DropCommander(squad.Id)" @ondragover:preventDefault @ondragover="() => {}">
+                    <b>Командир:</b> @RenderMember(commander)
+                </div>
+                <div class="slot" @ondrop="() => DropDeputy(squad.Id)" @ondragover:preventDefault @ondragover="() => {}">
+                    <b>Зам:</b> @RenderMember(deputy)
+                </div>
+                @for (var i = 0; i < 3; i++)
+                {
+                    var f = i < fighters.Count ? fighters[i] : null;
+                    <div class="slot" draggable="true" @ondragstart="() => { if (f is not null) _draggedPlayerId = f.PlayerId; }" @ondrop="() => DropFighter(squad.Id)" @ondragover:preventDefault @ondragover="() => {}">
+                        <b>Боец @(i+1):</b> @RenderMember(f)
+                    </div>
+                }
+
+                <details style="margin-top:10px;">
+                    <summary>Застройка (скрины/описание)</summary>
+                    @if (_builds.TryGetValue(squad.Id, out var bs) && bs.Count > 0)
+                    {
+                        @foreach (var b in bs)
+                        {
+                            <div style="margin:6px 0;padding:6px;border:1px solid #e5e7eb;border-radius:6px;">
+                                @if (!string.IsNullOrEmpty(b.Description)) { <p>@b.Description</p> }
+                                @if (!string.IsNullOrEmpty(b.FilePath))
+                                {
+                                    @if (b.FilePath.EndsWith(".mp4") || b.FilePath.EndsWith(".webm") || b.FilePath.EndsWith(".mov"))
+                                    {
+                                        <video src="@b.FilePath" controls style="max-width:100%;"></video>
+                                    }
+                                    else
+                                    {
+                                        <img src="@b.FilePath" style="max-width:100%;border-radius:4px;" />
+                                    }
+                                }
+                                <button class="ghost" style="padding:2px 6px;font-size:0.8rem;" @onclick="() => DeleteBuildAsync(b.Id, squad.Id)">Удалить</button>
+                            </div>
+                        }
+                    }
+                    <textarea @bind="_buildDesc" placeholder="Описание застройки" rows="2" style="width:100%;margin-top:6px;"></textarea>
+                    <InputFile OnChange="e => UploadBuildAsync(squad.Id, e)" accept="image/*,video/*" />
+                </details>
+            </article>
+        }
+    </div>
+
+    <aside class="panel" style="max-height:80vh;overflow:auto;">
+        <h3>Игроки</h3>
+        @foreach (var player in AvailablePlayers())
+        {
+            <div class="player-tile" draggable="true"
+                 @ondragstart="() => _draggedPlayerId = player.DiscordId"
+                 style="cursor:grab;padding:8px;margin-bottom:8px;border:1px solid #e5e7eb;border-radius:6px;">
+                <strong>@player.Nickname</strong>
+                <span class="badges">
+                    <span class="badge @StatusClass(player.Status)">@StatusName(player.Status)</span>
+                    @foreach (var role in player.Roles)
+                    {
+                        <span class="badge" style="background:@role.Color;color:#fff;">@role.Name</span>
+                    }
+                </span>
+                @if (player.Favorite is { } favorite)
+                {
+                    <span class="favorite-name">@favorite.Name</span>
+                    @if (favorite.Loadouts.Count == 0)
+                    {
+                        <span class="hint">Сборка не заполнена</span>
+                    }
+                    else
+                    {
+                        <span class="loadouts">
+                            @foreach (var loadout in favorite.Loadouts)
+                            {
+                                <span class="loadout">
+                                    <b>@BuildName(loadout.BuildType)</b>
+                                    <span>Здоровье @Num(loadout.Health)</span>
+                                    @if (loadout.BuildType != "speed")
+                                    {
+                                        <span>Лечение @Num(loadout.HealPerSecond)</span>
+                                    }
+                                    <span>Скорость @Num(loadout.Speed)</span>
+                                    @if (loadout.BuildType != "fat")
+                                    {
+                                        <span>Выносливость @Num(loadout.EnduranceRegen)</span>
+                                    }
+                                    <span>Вес @Num(loadout.Weight)</span>
+                                    @if (loadout.BuildType != "fat")
+                                    {
+                                        <span>Стойкость @Num(loadout.Resilience)</span>
+                                    }
+                                </span>
+                            }
+                        </span>
+                    }
+                }
+                else
+                {
+                    <span class="hint">Избранная броня не выбрана</span>
+                }
+            </div>
+        }
+    </aside>
+</div>
+
+@code {
+    private List<SquadDto> _squads = [];
+    private List<RosterPlayerDto> _players = [];
+    private string _error = "";
+    private ulong _draggedPlayerId = 0;
+    private Dictionary<int, List<SquadBuildDto>> _builds = new();
+    private string _buildDesc = "";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = "";
+        try
+        {
+            _squads = (await Squads.ListAsync()).ToList();
+            _players = await Roster.GetListAsync();
+            _builds.Clear();
+            foreach (var sq in _squads)
+                _builds[sq.Id] = (await Squads.GetBuildsAsync(sq.Id)).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Squads load"); }
+    }
+
+    private RenderFragment RenderMember(SquadMemberDto? member) => builder =>
+    {
+        if (member is null) { builder.AddContent(0, "— пусто — (перетащите игрока)"); return; }
+        builder.OpenElement(1, "span");
+        builder.AddAttribute(2, "style", "min-width:200px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;");
+        builder.AddContent(3, member.Nickname);
+        builder.CloseElement();
+        builder.AddContent(3, " ");
+        builder.OpenElement(4, "input");
+        builder.AddAttribute(5, "placeholder", "доп. роль");
+        builder.AddAttribute(6, "value", member.ExtraRole);
+        builder.AddAttribute(7, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateExtraAsync(member.Id, e.Value?.ToString())));
+        builder.CloseElement();
+        builder.AddContent(8, " ");
+        builder.OpenElement(9, "button");
+        builder.AddAttribute(10, "class", "ghost");
+        builder.AddAttribute(11, "onclick", EventCallback.Factory.Create(this, () => RemoveAsync(member.Id)));
+        builder.AddContent(12, "Убрать");
+        builder.CloseElement();
+    };
+
+    private Task DropCommander(int squadId) => DropAsync(squadId, "commander");
+    private Task DropDeputy(int squadId) => DropAsync(squadId, "deputy");
+    private Task DropFighter(int squadId) => DropAsync(squadId, "fighter");
+
+    private async Task DropAsync(int squadId, string role)
+    {
+        if (_draggedPlayerId == 0) return;
+        try
+        {
+            await Squads.AddMemberAsync(squadId, _draggedPlayerId, role);
+            _draggedPlayerId = 0;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Drop"); }
+    }
+
+    private async Task RenameAsync(int squadId, string? value, string description = "")
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        await Run(() => Squads.RenameAsync(squadId, value, description));
+    }
+
+    private async Task UpdateExtraAsync(int memberId, string? value)
+    {
+        await Run(() => Squads.UpdateExtraRoleAsync(memberId, value ?? ""));
+    }
+
+    private async Task RemoveAsync(int memberId) => await Run(() => Squads.RemoveAsync(memberId));
+
+        private async Task UploadBuildAsync(int squadId, InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null) return;
+        try
+        {
+            await using var stream = file.OpenReadStream(50 * 1024 * 1024);
+            await Squads.AddBuildAsync(squadId, _buildDesc, stream, file.Name);
+            _buildDesc = "";
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Upload build"); }
+    }
+
+    private async Task DeleteBuildAsync(int buildId, int squadId)
+    {
+        try { await Squads.DeleteBuildAsync(buildId); await LoadAsync(); }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Delete build"); }
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        try { await action(); await LoadAsync(); }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Squads action"); }
+    }
+
+    private static string StatusClass(string status) => status switch
+    {
+        "in_clan" => "clan",
+        "on_leave" => "leave",
+        "excluded" => "out",
+        _ => "wait"
+    };
+    private IEnumerable<RosterPlayerDto> AvailablePlayers()
+    {
+        var assigned = _squads.SelectMany(sq => sq.Members).Select(m => m.PlayerId).ToHashSet();
+        return _players.Where(p => !assigned.Contains(p.DiscordId));
+    }
+
+    private static string Num(decimal value) => value.ToString("0.##");
+
+    private static string BuildName(string type) => type switch
+    {
+        "fat" => "боевая",
+        "speed" => "скоростная",
+        _ => "комбинированная"
+    };
+
+    private static string StatusName(string status) => status switch
+    {
+        "in_clan" => "в клане",
+        "on_leave" => "в отпуске",
+        "excluded" => "исключен",
+        _ => "в обработке"
+    };
+}

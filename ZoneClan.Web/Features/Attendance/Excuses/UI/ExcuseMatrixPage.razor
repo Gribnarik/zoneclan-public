@@ -1,0 +1,174 @@
+@page "/excuses"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Attendance.Excuses.Models
+@inject AttendanceApi Api
+@inject ILogger<ExcuseMatrixPage> Logger
+
+<h1>Отписки</h1>
+<div class="toolbar">
+    <label>С <InputDate @bind-Value="_from" /></label>
+    <label>По <InputDate @bind-Value="_to" /></label>
+    <button @onclick="LoadAsync">Обновить</button>
+</div>
+
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+
+@if (_matrix is not null && _matrix.Tabs.Count > 0)
+{
+    <div class="panel matrix">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; gap: 8px;">
+                <select @bind="_bulkTabId" class="form-select" style="padding: 6px;">
+                    @if (_matrix is not null)
+                    {
+                        @foreach (var t in _matrix.Tabs)
+                        {
+                            <option value="@t.TabId">@t.WeekStart.ToString("dd.MM") этап @t.Stage</option>
+                        }
+                    }
+                </select>
+                <select @bind="_bulkStatus" class="form-select" style="padding: 6px;">
+                    <option value="attended">Был</option>
+                    <option value="excused">Отписка</option>
+                    <option value="missed">Пропуск</option>
+                </select>
+                <span class="hint">Выбран этап: @_bulkTabId</span>
+                <button class="ghost" disabled="@(_selectedPlayers.Count == 0 || _bulkTabId == 0 || _busy)" @onclick="ApplyBulkAsync">
+                    Применить к выбранным (@_selectedPlayers.Count)
+                </button>
+            </div>
+
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 40px;">
+                        <input type="checkbox" @onchange="ToggleAll" checked="@IsAllSelected" />
+                    </th>
+                    <th>Игрок</th>
+                    @foreach (var tab in _matrix.Tabs)
+                    {
+                        <th style="text-align: center; cursor: pointer; @(_bulkTabId == tab.TabId ? "background: #e0f2fe;" : "")" @onclick="() => _bulkTabId = tab.TabId">
+                            @tab.WeekStart.ToString("dd.MM")<br/>этап @tab.Stage
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var player in _matrix.Players)
+                {
+                    <tr>
+                        <td>
+                            <input type="checkbox" @onchange="e => TogglePlayer(player.PlayerId, e)" checked="@_selectedPlayers.Contains(player.PlayerId)" />
+                        </td>
+                        <td>@player.Nickname</td>
+                        @foreach (var tab in _matrix.Tabs)
+                        {
+                            var status = GetStatus(player.PlayerId, tab.TabId);
+                            <td style="text-align: center;">
+                                <select class="form-select" style="padding: 2px; font-size: 0.85rem;" 
+                                        value="@status" 
+                                        @onchange="e => ChangeStatusAsync(tab.TabId, player.PlayerId, e)">
+                                    <option value="attended">✅ Был</option>
+                                    <option value="excused">⚠️ Отписка</option>
+                                    <option value="missed">❌ Пропуск</option>
+                                </select>
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else if (_matrix is not null)
+{
+    <p class="hint">За выбранный период нет загруженных табов.</p>
+}
+
+@code {
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _from;
+    private ExcuseMatrixDto? _matrix;
+    private string _error = "";
+    private bool _busy;
+
+    private HashSet<ulong> _selectedPlayers = new();
+    private string _bulkStatus = "excused";
+    private int _bulkTabId = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _from = _to.AddDays(-56);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = "";
+        _selectedPlayers.Clear();
+        try 
+        { 
+            _matrix = await Api.GetExcusesAsync(_from, _to); 
+            if (_matrix.Tabs.Count > 0 && _bulkTabId == 0)
+                _bulkTabId = _matrix.Tabs.First().TabId;
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "ExcuseMatrix error"); }
+    }
+
+    private string GetStatus(ulong playerId, int tabId) =>
+        _matrix?.Cells.FirstOrDefault(cell => cell.PlayerId == playerId && cell.TabId == tabId)?.Status ?? "missed";
+
+    private async Task ChangeStatusAsync(int tabId, ulong playerId, ChangeEventArgs e)
+    {
+        var newStatus = e.Value?.ToString();
+        if (string.IsNullOrEmpty(newStatus) || _matrix is null) return;
+
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Api.SetCellAsync(tabId, playerId, newStatus);
+            
+            // Обновляем локально, чтобы не перезагружать всю таблицу
+            var cell = _matrix.Cells.FirstOrDefault(c => c.PlayerId == playerId && c.TabId == tabId);
+            if (cell != null) cell.Status = newStatus;
+            else _matrix.Cells.Add(new ExcuseCellDto { PlayerId = playerId, TabId = tabId, Status = newStatus });
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "ExcuseMatrix error"); }
+        finally { _busy = false; }
+    }
+
+    private void TogglePlayer(ulong playerId, ChangeEventArgs e)
+    {
+        if (e.Value is true) _selectedPlayers.Add(playerId);
+        else _selectedPlayers.Remove(playerId);
+    }
+
+    private bool IsAllSelected => _matrix != null && _matrix.Players.Count > 0 && _selectedPlayers.Count == _matrix.Players.Count;
+
+    private void ToggleAll(ChangeEventArgs e)
+    {
+        if (e.Value is true && _matrix != null)
+            _selectedPlayers = _matrix.Players.Select(p => p.PlayerId).ToHashSet();
+        else
+            _selectedPlayers.Clear();
+    }
+
+    private async Task ApplyBulkAsync()
+    {
+        if (_bulkTabId == 0 || _selectedPlayers.Count == 0) return;
+        
+        _busy = true;
+        _error = "";
+        try
+        {
+            Logger.LogInformation("Bulk apply: tab={Tab} status={Status} players={Count}", _bulkTabId, _bulkStatus, _selectedPlayers.Count);
+            await Api.SetBulkAsync(_bulkTabId, _selectedPlayers.ToList(), _bulkStatus);
+            await LoadAsync(); // Перезагружаем матрицу после массового изменения
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "ExcuseMatrix error"); }
+        finally { _busy = false; }
+    }
+}

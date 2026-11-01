@@ -1,0 +1,414 @@
+@page "/"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Attendance.TabsList.Models
+@using ZoneClan.Core.Features.Attendance.UploadTab.Models
+@using ZoneClan.Web.Features.Attendance.WeekDesk.BusinessLogic
+@using ZoneClan.Web.Features.Roster.Data
+@using ZoneClan.Core.Features.Roster.Models
+@using ZoneClan.Web.Features.Attendance.WeekDesk.UI.Components
+@inject WeekDeskService Service
+@inject RosterApi RosterService
+@inject ILogger<WeekDeskPage> Logger
+
+<div class="toolbar">
+    <DayNavigator Date="_currentDate" OnShift="ShiftDayAsync" />
+    <span class="hint">@_hint</span>
+    @if (_busy) { <span class="hint">Загрузка...</span> }
+</div>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <p class="error">@_error</p>
+}
+
+@if (_desk is not null)
+{
+    <section class="summary">
+        <div><b>@_desk.Summary.Attended</b><span>явка</span></div>
+        <div><b>@_desk.Summary.Excused</b><span>отписки</span></div>
+        <div><b>@_desk.Summary.Missed</b><span>пропуски</span></div>
+        <div><b>@_desk.Summary.Wins:@_desk.Summary.Losses</b><span>счёт матчей</span></div>
+        <div><b>@_desk.Summary.Kd</b><span>K/D</span></div>
+    </section>
+
+    <section class="stages">
+        @foreach (var stage in _desk.Stages)
+        {
+            <StageCard>
+                <h2>Этап @stage.Stage</h2>
+                
+                @if (_drafts.TryGetValue(stage.Stage, out var draft) && draft is not null)
+                {
+                    <div class="draft">
+                        <p class="@(draft.ClanRecognized ? "ok" : "error")">@draft.Message</p>
+                        
+                        <div class="draft-header-fields">
+                            <label>Команда 1 <input @bind="draft.Team1Name" /></label>
+                            <label>Счёт <input type="number" @bind="draft.Team1Score" /></label>
+                            <label>Команда 2 <input @bind="draft.Team2Name" /></label>
+                            <label>Счёт <input type="number" @bind="draft.Team2Score" /></label>
+                            <label style="grid-column: span 2;">Гильзы за этап <input type="number" @bind="draft.Guilds" /></label>
+                        </div>
+
+                        <div class="stage-table-container">
+                            <table>
+                                <thead>
+                                    <tr><th>Ник</th><th>K</th><th>D</th><th>A</th><th>Очки</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var player in draft.Players)
+                                    {
+                                        <tr class="@(player.Known ? "" : "unknown")">
+                                            <td><input @bind="player.Nickname" style="max-width: 140px;" /></td>
+                                            <td><input type="number" @bind="player.Kills" /></td>
+                                            <td><input type="number" @bind="player.Deaths" /></td>
+                                            <td><input type="number" @bind="player.Assists" /></td>
+                                            <td><input type="number" @bind="player.Score" /></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="actions">
+                            <button disabled="@_busy" @onclick="() => SaveDraftAsync(stage.Stage)">Сохранить</button>
+                            <button class="ghost" @onclick="() => _drafts.Remove(stage.Stage)">Отмена</button>
+                        </div>
+                    </div>
+                }
+                else if (stage.TabId is null)
+                {
+                    <p class="hint">Нет скрина для этого этапа.</p>
+                    <label class="drop">
+                        <InputFile OnChange="e => KeepFile(stage.Stage, e)" accept="image/png,image/jpeg" />
+                    </label>
+                    <button disabled="@_busy" @onclick="() => PreviewAsync(stage.Stage)">Распознать</button>
+                }
+                else
+                {
+                    @if (_editingStage != stage.Stage)
+                    {
+                    <p class="score">
+                        @stage.Team1Name @stage.Team1Score : @stage.Team2Score @stage.Team2Name
+                        @if (!stage.IsValid) { <span class="error"> — клан не в шапке</span> }
+                        else { <span> — @(stage.IsWinner ? "победа" : "поражение")</span> }
+                        <span class="hint"> | Гильзы: <b>@stage.Guilds</b></span>
+                    </p>
+                    
+                    <div class="stage-table-container">
+                        <table>
+                            <thead>
+                                <tr><th>Место</th><th>Ник</th><th>K/D/A</th><th>Очки</th><th>Клан</th><th>Действие</th></tr>
+                            </thead>
+                            <tbody>
+                                @for (var i = 0; i < stage.Players.Count; i++)
+                                {
+                                    var player = stage.Players[i];
+                                    <tr>
+                                        <td>@(i + 1)</td>
+                                        <td>@player.Nickname</td>
+                                        <td>@player.Kills/@player.Deaths/@player.Assists</td>
+                                        <td>@player.Score</td>
+                                        <td><span class="badge @StatusClass(player.Status)">@StatusName(player.Status)</span></td>
+                                        <td>
+                                            <button class="ghost" style="padding: 2px 6px; font-size: 0.8rem;" disabled="@_busy" @onclick="() => ToggleExcuseAsync(stage.TabId.Value, player)">
+                                                @(player.IsExcused ? "отписка" : "был")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    @if (stage.Missed.Count > 0)
+                    {
+                        <p class="missed" style="margin-top: 8px;">
+                            Нет в табе:
+                            @foreach (var missed in stage.Missed)
+                            {
+    @missed.Nickname
+                            }
+                        </p>
+                    }
+                    <div class="actions">
+                        <button class="ghost" @onclick="() => _editingStage = (_editingStage == stage.Stage ? 0 : stage.Stage)">Изменить</button>
+                        @if (_confirmDelete == stage.Stage)
+                        {
+                            <button class="warn" disabled="@_busy" @onclick="() => DeleteAsync(stage.TabId.Value)">Точно удалить</button>
+                            <button class="ghost" @onclick="() => _confirmDelete = 0">Отмена</button>
+                        }
+                        else
+                        {
+                            <button class="ghost" @onclick="() => _confirmDelete = stage.Stage">Удалить этап</button>
+                        }
+                    </div>
+
+                    }
+                    @if (_editingStage == stage.Stage)
+                    {
+                        <div class="draft">
+                            <div class="draft-header-fields">
+                                <label>Команда 1 <input @bind="stage.Team1Name" /></label>
+                                <label>Счёт <input type="number" @bind="stage.Team1Score" /></label>
+                                <label>Команда 2 <input @bind="stage.Team2Name" /></label>
+                                <label>Счёт <input type="number" @bind="stage.Team2Score" /></label>
+                                <label style="grid-column: span 2;">Гильзы за этап <input type="number" @bind="stage.Guilds" /></label>
+                            </div>
+                            <div class="stage-table-container">
+                                <table>
+                                    <thead><tr><th>Статус</th><th>Ник</th><th>K</th><th>D</th><th>A</th><th>Очки</th><th></th></tr></thead>
+                                    <tbody>
+                                        @foreach (var player in stage.Players)
+                                        {
+                                            <tr>
+                                                <td><span class="badge @StatusClass(player.Status)">@StatusName(player.Status)</span></td>
+                                                <td>
+                                                    <input @bind="player.Nickname" style="max-width: 140px;" />
+                                                    <select style="max-width: 140px;" @onchange="e => AssignPlayer(player, e)">
+                                                        <option value="">— назначить —</option>
+                                                        @foreach (var rp in _rosterPlayers)
+                                                        {
+                                                            <option value="@rp.DiscordId">@rp.Nickname</option>
+                                                        }
+                                                    </select>
+                                                </td>
+                                                <td><input type="number" @bind="player.Kills" /></td>
+                                                <td><input type="number" @bind="player.Deaths" /></td>
+                                                <td><input type="number" @bind="player.Assists" /></td>
+                                                <td><input type="number" @bind="player.Score" /></td>
+                                                <td><button class="ghost" style="padding:2px 6px;" @onclick="() => stage.Players.Remove(player)">✕</button></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="actions">
+                                <button class="ghost" @onclick="() => stage.Players.Add(new TabPlayerRowDto())">+ Игрок</button>
+                            </div>
+                            <div class="actions">
+                                <button disabled="@_busy" @onclick="() => SaveEditAsync(stage)">Сохранить изменения</button>
+                                <button class="ghost" @onclick="() => _editingStage = 0">Отмена</button>
+                            </div>
+                        </div>
+                    }
+                }
+            </StageCard>
+        }
+    </section>
+}
+
+@code {
+    // Храним текущую дату (день)
+    private DateOnly _currentDate = WeekDayNavigator.Snap(DateOnly.FromDateTime(DateTime.Today));
+    private WeekDeskDto? _desk;
+    private PlayerCardDto? _card;
+    private readonly Dictionary<int, IBrowserFile?> _files = new();
+    private readonly Dictionary<int, AttendancePreviewDto?> _drafts = new();
+    private string _error = "";
+    private string _hint = "";
+    private bool _busy;
+    private int _confirmDelete;
+    private int _editingStage;
+    private List<RosterPlayerDto> _rosterPlayers = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _rosterPlayers = await RosterService.GetListAsync(); } catch { _rosterPlayers = []; }
+        await LoadAsync();
+    }
+
+    private async Task ShiftDayAsync(int days)
+    {
+        _currentDate = WeekDayNavigator.Shift(_currentDate, days);
+        _hint = "";
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = "";
+        _drafts.Clear();
+        _files.Clear();
+        _confirmDelete = 0;
+        try
+        {
+            _desk = await Service.GetWeekAsync(_currentDate);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _desk = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void KeepFile(int stage, InputFileChangeEventArgs change) => _files[stage] = change.File;
+
+    private async Task PreviewAsync(int stage)
+    {
+        if (!_files.TryGetValue(stage, out var file) || file is null)
+        {
+            _error = "Сначала выберите скрин.";
+            return;
+        }
+
+        _busy = true;
+        _error = "";
+        try
+        {
+            await using var stream = file.OpenReadStream(5 * 1024 * 1024);
+            _drafts[stage] = await Service.PreviewAsync(stream, file.Name, _currentDate, stage);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveDraftAsync(int stage)
+    {
+        if (!_drafts.TryGetValue(stage, out var draft) || draft is null)
+            return;
+
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Service.SaveAsync(draft);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+            _busy = false;
+        }
+    }
+
+    private static string StatusClass(string status) => string.IsNullOrEmpty(status) ? "unknown" : status switch
+    {
+        "in_clan" => "clan",
+        "on_leave" => "leave",
+        "excluded" => "out",
+        _ => "wait"
+    };
+
+    private static string StatusName(string status) => string.IsNullOrEmpty(status) ? "не определен" : status switch
+    {
+        "in_clan" => "в клане",
+        "on_leave" => "в отпуске",
+        "excluded" => "исключен",
+        _ => "в обработке"
+    };
+
+    private void AssignPlayer(TabPlayerRowDto player, ChangeEventArgs e)
+    {
+        if (ulong.TryParse(e.Value?.ToString(), out var id) && id > 0)
+        {
+            var rp = _rosterPlayers.FirstOrDefault(r => r.DiscordId == id);
+            if (rp is not null)
+            {
+                player.PlayerId = rp.DiscordId;
+                player.Nickname = rp.Nickname;
+                player.Status = rp.Status;
+            }
+        }
+    }
+
+    private async Task SaveEditAsync(StageColumnDto stage)
+    {
+        if (stage.TabId is null) return;
+        _busy = true;
+        _error = "";
+        try
+        {
+            var request = new SaveTabRequest
+            {
+                WeekStart = _currentDate,
+                Stage = stage.Stage,
+                Team1Name = stage.Team1Name,
+                Team1Score = stage.Team1Score,
+                Team2Name = stage.Team2Name,
+                Team2Score = stage.Team2Score,
+                Guilds = stage.Guilds,
+                Players = stage.Players.Where(p => !string.IsNullOrWhiteSpace(p.Nickname)).Select(p => new AttendancePlayerDraft
+                {
+                    Nickname = p.Nickname,
+                    PlayerId = p.PlayerId,
+                    Kills = p.Kills,
+                    Deaths = p.Deaths,
+                    Assists = p.Assists,
+                    Score = p.Score
+                }).ToList()
+            };
+            await Service.UpdateTabAsync(stage.TabId.Value, request);
+            _editingStage = 0;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleExcuseAsync(int tabId, TabPlayerRowDto player)
+    {
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Service.SetExcuseAsync(tabId, player.Id, !player.IsExcused);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(int tabId)
+    {
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Service.DeleteTabAsync(tabId);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+            _busy = false;
+        }
+    }
+
+    private async Task OpenCardAsync(ulong? playerId, string nickname)
+    {
+        _error = "";
+        try
+        {
+            _card = await Service.GetPlayerAsync(playerId, nickname, _currentDate.AddDays(-56), _currentDate);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "WeekDesk error");
+            _error = ex.Message;
+        }
+    }
+
+}

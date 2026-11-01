@@ -1,0 +1,12 @@
+@using ZoneClan.Web.Features.Attendance.WeekDesk.BusinessLogic
+
+<div class="day-nav">
+    <button class="ghost" @onclick="() => OnShift.InvokeAsync(-1)">←</button>
+    <strong>@Date.ToString("dd.MM.yyyy") (@WeekDayNavigator.Name(Date))</strong>
+    <button class="ghost" @onclick="() => OnShift.InvokeAsync(1)">→</button>
+</div>
+
+@code {
+    [Parameter] public DateOnly Date { get; set; }
+    [Parameter] public EventCallback<int> OnShift { get; set; }
+}

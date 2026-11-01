@@ -1,0 +1,464 @@
+@page "/roster"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Roster.BusinessLogic
+@using ZoneClan.Core.Features.Roster.Models
+@using ZoneClan.Web.Features.Roster.Data
+@using ZoneClan.Web.Features.Roster.BusinessLogic
+@inject RosterService Service
+@inject ILogger<RosterPage> Logger
+
+<h1>Состав</h1>
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+<div class="cards">
+    @foreach (var group in _players.GroupBy(p => p.Status))
+    {
+        <details open>
+            <summary><strong>@StatusName(group.Key)</strong> (@group.Count())</summary>
+            @foreach (var player in group.OrderByDescending(p => p.Kd))
+            {
+
+        <button class="player-tile" @onclick="() => OpenAsync(player.DiscordId)">
+            <strong>@player.Nickname</strong>
+            <span class="badges">
+                <span class="badge @StatusClass(player.Status)">@StatusName(player.Status)</span>
+                <span class="badge @(player.HasSledgehammer ? "on" : "")">@(player.HasSledgehammer ? "кувалда" : "без кувалды")</span>
+                <span class="badge @(player.PlaysSniper ? "on" : "")">@(player.PlaysSniper ? "снайпер" : "не снайпер")</span>
+            </span>
+            @if (player.Favorite is { } favorite)
+            {
+                <span class="favorite-name">@favorite.Name</span>
+                @if (favorite.Loadouts.Count == 0)
+                {
+                    <span class="hint">Сборка не заполнена</span>
+                }
+                else
+                {
+                    <span class="loadouts">
+                        @foreach (var loadout in favorite.Loadouts)
+                        {
+                            <span class="loadout">
+                                <b>@BuildName(loadout.BuildType)</b>
+                                <span><em>Здоровье</em> @Num(loadout.Health)</span>
+                                @if (loadout.BuildType != "speed")
+                                {
+                                    <span><em>Лечение в секунду</em> @Num(loadout.HealPerSecond)</span>
+                                }
+                                <span><em>Скорость</em> @Num(loadout.Speed)</span>
+                                @if (loadout.BuildType != "fat")
+                                {
+                                    <span><em>Восстановление выносливости</em> @Num(loadout.EnduranceRegen)</span>
+                                }
+                                <span><em>Вес</em> @Num(loadout.Weight)</span>
+                                @if (loadout.BuildType != "fat")
+                                {
+                                    <span><em>Стойкость</em> @Num(loadout.Resilience)</span>
+                                }
+                            </span>
+                        }
+                    </span>
+                }
+            }
+            else
+            {
+                <span class="hint">Избранная броня не выбрана</span>
+            }
+        </button>
+            }
+        </details>
+    }
+</div>
+
+@if (_card is not null)
+{
+    <div class="drawer-back" @onclick="Close"></div>
+    <aside class="drawer">
+        <button class="ghost" @onclick="Close">Закрыть</button>
+        <h2>@_card.Nickname</h2>
+        <div class="fields">
+            <label>Discord ID <input @bind="_discordId" /></label>
+            <label>Ник <input @bind="_card.Nickname" /></label>
+            <label>Статус
+                <select @bind="_card.Status">
+                    <option value="pending">в обработке</option>
+                    <option value="in_clan">в клане</option>
+                    <option value="on_leave">в отпуске</option>
+                    <option value="excluded">исключен</option>
+                </select>
+            </label>
+        </div>
+        <div class="toggles">
+            <label class="toggle @(_card.HasSledgehammer ? "on" : "")">
+                <input type="checkbox" @bind="_card.HasSledgehammer" />
+                <span>Кувалда</span>
+            </label>
+            <label class="toggle @(_card.PlaysSniper ? "on" : "")">
+                <input type="checkbox" @bind="_card.PlaysSniper" />
+                <span>Снайпер</span>
+            </label>
+        </div>
+        @if (_card.PlaysSniper)
+        {
+            <h3>Винтовки</h3>
+            <div class="rifles">
+                @foreach (var sniper in _card.Snipers)
+                {
+                    <label class="rifle @(sniper.Selected ? "on" : "")">
+                        <input type="checkbox" @bind="sniper.Selected" />
+                        <span>@sniper.Name</span>
+                    </label>
+                }
+            </div>
+        }
+
+        <h3>Заметки</h3>
+        @{
+            var note = _card.Notes[_noteIndex];
+        }
+        <div class="armor-card">
+            <div class="armor-nav">
+                <button class="ghost" @onclick="PreviousNote">Назад</button>
+                <strong>@NoteName(note.NoteType)</strong>
+                <span class="hint">@(_noteIndex + 1) / @_card.Notes.Count</span>
+                <button class="ghost" @onclick="NextNote">Вперёд</button>
+            </div>
+            <textarea class="note-text" @bind="note.Content" rows="12" placeholder="Текст заметки"></textarea>
+        </div>
+
+        <h3>Сборка</h3>
+        @{
+            var build = _card.Builds[_buildIndex];
+        }
+        <div class="armor-card">
+            <div class="armor-nav">
+                <button class="ghost" @onclick="PreviousBuild">Назад</button>
+                <strong>@BuildName(build.BuildType)</strong>
+                <span class="hint">@(_buildIndex + 1) / @_card.Builds.Count</span>
+                <button class="ghost" @onclick="NextBuild">Вперёд</button>
+            </div>
+            <StatGrid Stats="build" />
+        </div>
+
+        <h3>Броня</h3>
+        @if (_card.Armors.Count == 0)
+        {
+            <p class="hint">Брони пока нет.</p>
+        }
+        else
+        {
+            var armor = _card.Armors[_armorIndex];
+            <div class="armor-card">
+                <div class="armor-nav">
+                    <button class="ghost" @onclick="PreviousArmor">Назад</button>
+                    <strong>@armor.Name</strong>
+                    <span class="hint">@(_armorIndex + 1) / @_card.Armors.Count</span>
+                    <button class="ghost" @onclick="NextArmor">Вперёд</button>
+                </div>
+                <label>Сборка
+                    <select value="@armor.BuildType" @onchange="e => MoveArmor(armor, e)">
+                        <option value="fat">боевая</option>
+                        <option value="speed">скоростная</option>
+                        <option value="combined">комбинированная</option>
+                    </select>
+                </label>
+                <StatGrid Stats="armor" Derived="true" BuildBleeding="BleedingOf(armor.BuildType)" ArmorBleeding="ArmorBleed(armor)" />
+                <div class="actions">
+                    <button type="button" class="ghost" @onclick="() => SetFavorite(armor)">@(armor.IsFavorite ? "Избранная" : "Сделать избранной")</button>
+                    <button type="button" class="ghost" @onclick="RemoveArmor">Убрать броню</button>
+                </div>
+            </div>
+        }
+        <div class="actions">
+            <select @bind="_addArmorId">
+                <option value="0">Добавить из каталога</option>
+                @foreach (var item in AvailableArmors())
+                {
+                    <option value="@item.Id">@item.Name</option>
+                }
+            </select>
+            <button class="ghost" @onclick="AddArmor">Добавить</button>
+        </div>
+
+        <div class="actions">
+            <button disabled="@_busy" @onclick="SaveAsync">Сохранить</button>
+            @if (_confirmDelete)
+            {
+                <button class="warn" disabled="@_busy" @onclick="DeleteAsync">Точно удалить</button>
+                <button class="ghost" disabled="@_busy" @onclick="() => _confirmDelete = false">Отмена</button>
+            }
+            else
+            {
+                <button class="ghost" disabled="@_busy" @onclick="() => _confirmDelete = true">Удалить карточку</button>
+            }
+        </div>
+
+        <h3>Табы</h3>
+        @if (_card.Lines.Count == 0)
+        {
+            <p class="hint">За последние недели табов нет.</p>
+        }
+        else
+        {
+            <table>
+                <tbody>
+                    @foreach (var line in _card.Lines)
+                    {
+                        <tr>
+                            <td>@line.WeekStart.ToString("dd.MM") этап @line.Stage</td>
+                            <td>@(line.IsExcused ? "отписка" : $"{line.Kills}/{line.Deaths}/{line.Assists}")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </aside>
+}
+
+@code {
+    private List<RosterPlayerDto> _players = [];
+    private RosterCardDto? _card;
+    private ulong _loadedId;
+    private string _discordId = "";
+    private int _armorIndex;
+    private int _buildIndex;
+    private int _noteIndex;
+    private int _addArmorId;
+    private string _error = "";
+    private bool _busy;
+    private bool _confirmDelete;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try { _players = await Service.GetListAsync(); }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Roster error"); }
+    }
+
+    private async Task OpenAsync(ulong id)
+    {
+        _error = "";
+        try
+        {
+            _card = await Service.GetAsync(id);
+            _loadedId = id;
+            _discordId = id.ToString();
+            _armorIndex = 0;
+            _buildIndex = _card.Builds.FindIndex(item => item.BuildType == "combined");
+            if (_buildIndex < 0) _buildIndex = 0;
+            _noteIndex = 0;
+            _addArmorId = 0;
+            _confirmDelete = false;
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Roster error"); }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_card is null) return;
+        if (!ulong.TryParse(_discordId.Trim(), out var discordId) || discordId == 0)
+        {
+            _error = "Discord ID должен быть числом";
+            return;
+        }
+
+        _busy = true;
+        _error = "";
+        try
+        {
+            var savedId = await Service.UpdateAsync(_loadedId, new UpdateRosterRequest
+            {
+                DiscordId = discordId,
+                Nickname = _card.Nickname,
+                Status = _card.Status,
+                HasSledgehammer = _card.HasSledgehammer,
+                PlaysSniper = _card.PlaysSniper,
+                Notes = _card.Notes,
+                Builds = _card.Builds,
+                Armors = _card.Armors.Select(PrepareArmor).ToList(),
+                SniperIds = _card.Snipers.Where(sniper => sniper.Selected).Select(sniper => sniper.Id).ToList()
+            });
+            await LoadAsync();
+            await OpenAsync(savedId);
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Roster error"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_card is null) return;
+        _busy = true;
+        _error = "";
+        try
+        {
+            await Service.DeleteAsync(_loadedId);
+            _card = null;
+            _confirmDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "Roster error"); }
+        finally { _busy = false; }
+    }
+
+    private void Close() => _card = null;
+
+    private void PreviousNote() => _noteIndex = Shift(_noteIndex, -1, _card?.Notes.Count ?? 0);
+
+    private void NextNote() => _noteIndex = Shift(_noteIndex, 1, _card?.Notes.Count ?? 0);
+
+    private void PreviousBuild() => _buildIndex = Shift(_buildIndex, -1, _card?.Builds.Count ?? 0);
+
+    private void NextBuild() => _buildIndex = Shift(_buildIndex, 1, _card?.Builds.Count ?? 0);
+
+    private void PreviousArmor() => _armorIndex = Shift(_armorIndex, -1, _card?.Armors.Count ?? 0);
+
+    private void NextArmor() => _armorIndex = Shift(_armorIndex, 1, _card?.Armors.Count ?? 0);
+
+    private static int Shift(int index, int step, int count) =>
+        count == 0 ? 0 : (index + step + count) % count;
+
+    private void RemoveArmor()
+    {
+        if (_card is null || _card.Armors.Count == 0) return;
+        _card.Armors.RemoveAt(_armorIndex);
+        if (_armorIndex >= _card.Armors.Count)
+            _armorIndex = Math.Max(0, _card.Armors.Count - 1);
+    }
+
+    private void MoveArmor(RosterArmorDto armor, ChangeEventArgs change)
+    {
+        if (_card is null) return;
+        var next = change.Value?.ToString() ?? armor.BuildType;
+        if (next == armor.BuildType) return;
+        if (_card.Armors.Any(other => other != armor && other.BuildType == next && other.ArmorId == armor.ArmorId))
+        {
+            _error = "Эта броня уже есть в выбранной сборке";
+            return;
+        }
+
+        _error = "";
+        armor.BuildType = next;
+        ApplyBuild(armor);
+    }
+
+    private void SetFavorite(RosterArmorDto armor)
+    {
+        if (_card is null) return;
+        var next = !armor.IsFavorite;
+        foreach (var item in _card.Armors)
+            item.IsFavorite = next && item.ArmorId == armor.ArmorId;
+    }
+
+    private static string Num(decimal value) => value.ToString("0.##");
+
+    private void AddArmor()
+    {
+        if (_card is null || _addArmorId == 0 || _card.Builds.Count == 0) return;
+        var build = _card.Builds[_buildIndex];
+        if (_card.Armors.Any(armor => armor.ArmorId == _addArmorId && armor.BuildType == build.BuildType)) return;
+        var item = _card.ArmorCatalog.FirstOrDefault(armor => armor.Id == _addArmorId);
+        if (item is null) return;
+        var added = new RosterArmorDto { BuildType = build.BuildType, ArmorId = item.Id, Name = item.Name };
+        _card.Armors.Add(added);
+        ApplyBuild(added);
+        _armorIndex = _card.Armors.Count - 1;
+        _addArmorId = 0;
+    }
+
+    private RosterArmorDto PrepareArmor(RosterArmorDto armor)
+    {
+        var copy = new RosterArmorDto
+        {
+            BuildType = armor.BuildType,
+            ArmorId = armor.ArmorId,
+            Name = armor.Name,
+            HealPerSec = armor.HealPerSec,
+            Vitality = armor.Vitality,
+            HealEfficiency = armor.HealEfficiency,
+            HealthRegen = armor.HealthRegen,
+            MoveSpeed = armor.MoveSpeed,
+            RunSpeed = armor.RunSpeed,
+            Endurance = armor.Endurance,
+            EnduranceRegen = armor.EnduranceRegen,
+            CarryWeight = armor.CarryWeight,
+            BulletResist = armor.BulletResist,
+            RuptureProtection = armor.RuptureProtection,
+            Resilience = armor.Resilience,
+            IsFavorite = armor.IsFavorite
+        };
+        copy.EffectiveHealth = ArmorMath.Health(copy.BulletResist, copy.Vitality);
+        copy.Bleeding = ArmorMath.Bleeding(BleedingOf(copy.BuildType), ArmorBleed(armor));
+        copy.TotalSpeed = copy.MoveSpeed + copy.RunSpeed;
+        return copy;
+    }
+
+    private void ApplyBuild(RosterArmorDto armor)
+    {
+        if (_card is null) return;
+        var build = _card.Builds.FirstOrDefault(item => item.BuildType == armor.BuildType) ?? _card.Builds.FirstOrDefault();
+        if (build is null) return;
+        var catalog = _card.ArmorCatalog.FirstOrDefault(item => item.Id == armor.ArmorId);
+        decimal Mod(string code) => catalog?.Modifiers.Where(modifier => modifier.Code == code).Sum(modifier => modifier.Value) ?? 0;
+        armor.HealPerSec = build.HealPerSec + Mod("heal_per_sec");
+        armor.Vitality = build.Vitality + Mod("vitality");
+        armor.HealEfficiency = build.HealEfficiency + Mod("heal_efficiency");
+        armor.HealthRegen = build.HealthRegen + Mod("health_regen");
+        armor.MoveSpeed = build.MoveSpeed + Mod("move_speed");
+        armor.RunSpeed = build.RunSpeed + Mod("run_speed");
+        armor.Endurance = build.Endurance + Mod("endurance");
+        armor.EnduranceRegen = build.EnduranceRegen + Mod("endurance_regen");
+        armor.CarryWeight = build.CarryWeight + Mod("carry_weight");
+        armor.BulletResist = build.BulletResist + (catalog?.BulletResist ?? 0) + Mod("bullet_resist");
+        armor.RuptureProtection = (catalog?.RuptureProtection ?? 0) + Mod("rupture_protection");
+        armor.Resilience = build.Resilience + Mod("resilience");
+        armor.EffectiveHealth = ArmorMath.Health(armor.BulletResist, armor.Vitality);
+        armor.Bleeding = ArmorMath.Bleeding(build.Bleeding, Mod("bleeding"));
+        armor.TotalSpeed = armor.MoveSpeed + armor.RunSpeed;
+    }
+
+    private decimal BleedingOf(string buildType) =>
+        _card?.Builds.FirstOrDefault(build => build.BuildType == buildType)?.Bleeding ?? 0;
+
+    private decimal ArmorBleed(RosterArmorDto armor) =>
+        _card?.ArmorCatalog.FirstOrDefault(item => item.Id == armor.ArmorId)?.Modifiers
+            .Where(modifier => modifier.Code == "bleeding").Sum(modifier => modifier.Value) ?? 0;
+
+    private IEnumerable<CatalogItemDto> AvailableArmors()
+    {
+        if (_card is null || _card.Builds.Count == 0) return [];
+        var type = _card.Builds[_buildIndex].BuildType;
+        return _card.ArmorCatalog.Where(item => _card.Armors.All(armor => armor.ArmorId != item.Id || armor.BuildType != type));
+    }
+
+    private static string BuildName(string type) => type switch
+    {
+        "fat" => "боевая",
+        "speed" => "скоростная",
+        _ => "комбинированная"
+    };
+
+    private static string NoteName(string type) => type switch
+    {
+        "duel" => "дуэлянт",
+        "player" => "игрок",
+        "commander" => "командир",
+        "caller" => "коллер",
+        _ => "табельщик"
+    };
+
+    private static string StatusClass(string status) => status switch
+    {
+        "in_clan" => "clan",
+        "on_leave" => "leave",
+        "excluded" => "out",
+        _ => "wait"
+    };
+
+    private static string StatusName(string status) => status switch
+    {
+        "in_clan" => "в клане",
+        "on_leave" => "в отпуске",
+        "excluded" => "исключен",
+        _ => "в обработке"
+    };
+}

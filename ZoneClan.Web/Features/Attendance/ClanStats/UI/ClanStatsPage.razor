@@ -1,0 +1,70 @@
+@page "/clan"
+@rendermode InteractiveServer
+@using ZoneClan.Core.Features.Attendance.ClanStats.Models
+@inject AttendanceApi Api
+
+<h1>Клан</h1>
+<div class="toolbar">
+    <label>С <InputDate @bind-Value="_from" /></label>
+    <label>По <InputDate @bind-Value="_to" /></label>
+    <button @onclick="LoadAsync">Обновить</button>
+</div>
+@if (!string.IsNullOrEmpty(_error)) { <p class="error">@_error</p> }
+@if (_stats is not null)
+{
+    <section class="summary">
+        <div><b>@_stats.TotalGames</b><span>игры</span></div>
+        <div><b>@_stats.Wins</b><span>победы</span></div>
+        <div><b>@_stats.Losses</b><span>поражения</span></div>
+        <div><b>@_stats.WinRate%</b><span>винрейт</span></div>
+        <div><b>@_stats.Kd</b><span>K/D</span></div>
+        <div><b>@_stats.Kills/@_stats.Deaths/@_stats.Assists</b><span>K/D/A</span></div>
+        <div><b>@_stats.Score</b><span>очки</span></div>
+        <div><b>@_stats.Guilds</b><span>гильзы</span></div>
+    </section>
+    <section class="tops">
+        <div class="panel"><h2>Топ-5 по K/D</h2>@Top(_stats.TopByKd)</div>
+        <div class="panel"><h2>Топ-5 по KDA</h2>@Top(_stats.TopByKda)</div>
+        <div class="panel"><h2>Топ-5 по среднему счёту</h2>@Top(_stats.TopByScore)</div>
+        <div class="panel"><h2>Топ-5 по явке</h2>@Top(_stats.TopByAttendance)</div>
+        <div class="panel"><h2>Лоутаб-5 по K/D</h2>@Top(_stats.LowByKd)</div>
+        <div class="panel"><h2>Лоутаб-5 по KDA</h2>@Top(_stats.LowByKda)</div>
+        <div class="panel"><h2>Лоутаб-5 по среднему счёту</h2>@Top(_stats.LowByScore)</div>
+        <div class="panel"><h2>Лоутаб-5 по явке (неявки)</h2>@Top(_stats.LowByAttendance)</div>
+    </section>
+}
+
+@code {
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _from;
+    private ClanStatsDto? _stats;
+    private string _error = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _from = _to.AddDays(-56);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = "";
+        try { _stats = await Api.GetClanAsync(_from, _to); }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private static RenderFragment Top(List<TopPlayerDto> rows) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "panel");
+        builder.OpenElement(4, "ol");
+        foreach (var row in rows)
+        {
+            builder.OpenElement(5, "li");
+            builder.AddContent(6, $"{row.Nickname} — {row.Value}");
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+}

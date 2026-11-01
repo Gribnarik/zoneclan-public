@@ -1,0 +1,60 @@
+@using System.Globalization
+@using ZoneClan.Core.Features.Roster.BusinessLogic
+@using ZoneClan.Core.Features.Roster.Models
+
+<div class="stat-grid">
+    @if (Derived)
+    {
+        <label>Здоровье <input readonly value="@Format(Health)" /></label>
+    }
+    else
+    {
+        <label>Здоровье <input type="number" step="0.01" @bind="Stats.EffectiveHealth" /></label>
+    }
+    <label>Лечение <input type="number" step="0.01" @bind="Stats.HealPerSec" /></label>
+    @if (Derived)
+    {
+        <label>Лечение в секунду <input readonly value="@Format(HealEachSecond)" /></label>
+    }
+    @if (Derived)
+    {
+        <label>Кровотечение <input readonly value="@Format(Bleed)" /></label>
+    }
+    else
+    {
+        <label>Кровотечение <input type="number" step="0.01" @bind="Stats.Bleeding" /></label>
+    }
+    <label>Живучесть <input type="number" step="0.01" @bind="Stats.Vitality" /></label>
+    <label>Эффективность лечения <input type="number" step="0.01" @bind="Stats.HealEfficiency" /></label>
+    <label>Регенерация <input type="number" step="0.01" @bind="Stats.HealthRegen" /></label>
+    <label>Скорость хода <input type="number" step="0.01" @bind="Stats.MoveSpeed" /></label>
+    <label>Скорость бега <input type="number" step="0.01" @bind="Stats.RunSpeed" /></label>
+    <label>Выносливость <input type="number" step="0.01" @bind="Stats.Endurance" /></label>
+    <label>Восстановление выносливости <input type="number" step="0.01" @bind="Stats.EnduranceRegen" /></label>
+    <label>Вес <input type="number" step="0.01" @bind="Stats.CarryWeight" /></label>
+    <label>Пулестойкость <input type="number" step="0.01" @bind="Stats.BulletResist" /></label>
+    <label>Защита от разрыва <input type="number" step="0.01" @bind="Stats.RuptureProtection" /></label>
+    <label>Стойкость <input type="number" step="0.01" @bind="Stats.Resilience" /></label>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public RosterBuildDto Stats { get; set; } = new();
+
+    [Parameter]
+    public bool Derived { get; set; }
+
+    [Parameter]
+    public decimal BuildBleeding { get; set; }
+
+    [Parameter]
+    public decimal ArmorBleeding { get; set; }
+
+    private decimal Health => ArmorMath.Health(Stats.BulletResist, Stats.Vitality);
+
+    private decimal HealEachSecond => ArmorMath.HealPerSecond(Health, Stats.HealPerSec);
+
+    private decimal Bleed => ArmorMath.Bleeding(BuildBleeding, ArmorBleeding);
+
+    private static string Format(decimal value) => value.ToString("0.00", CultureInfo.InvariantCulture);
+}
