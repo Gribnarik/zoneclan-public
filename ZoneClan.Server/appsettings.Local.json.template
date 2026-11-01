@@ -1,6 +1,6 @@
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Server=localhost;Database=clan_hub_real;User=root;Password=YOUR_PASSWORD;"
+    "DefaultConnection": "Server=localhost;Database=clan_hub;User=root;Password="
   },
   "DemoMode": {
     "Enabled": false

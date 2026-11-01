@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace ZoneClan.Server.Features.Attendance.UploadTab.BusinessLogic;
 
@@ -18,8 +19,10 @@ public class AttendanceDraftStore
     public void Put(AttendanceDraft draft)
     {
         var cutoff = DateTime.UtcNow.AddHours(-6);
-        foreach (var stale in _drafts.Where(pair => pair.Value.CreatedAt < cutoff).Select(pair => pair.Key))
-            _drafts.TryRemove(stale, out _);
+        // Collect stale keys first to avoid collection modification during enumeration
+        var staleKeys = _drafts.Where(pair => pair.Value.CreatedAt < cutoff).Select(pair => pair.Key).ToList();
+        foreach (var key in staleKeys)
+            _drafts.TryRemove(key, out _);
         _drafts[draft.Id] = draft;
     }
 
